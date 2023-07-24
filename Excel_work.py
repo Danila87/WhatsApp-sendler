@@ -1,123 +1,198 @@
+import tkinter as tk
 import openpyxl
 import re
 import time
-
-from colorama import init, Fore
+import Support_function
+from prettytable import PrettyTable
+from tkinter import filedialog
+from colorama import Fore
 from openpyxl.styles import PatternFill
 
-init(autoreset=True)
 
-try:
-    wb = openpyxl.load_workbook(filename='Table.xlsx')
-except Exception:
-    print('Не удалось открыть файл!')
-    time.sleep(5)
-    exit()
+class Excel:
+    """ Класс для работы с Excel таблицей """
 
-sheet = wb['Start']
+    def __init__(self):
 
+        self.__wb = None
+        self.__sheet_main = None
+        self.__sheet_mailing_result = None
 
-def get_sheet_row() -> int:
+        self.__file_path = None
 
-    """
-    Функция возвращает длину непустых строк таблицы
+        self.__selected_columns = []
+        self.__selected_columns_print = []
 
-    :return sheet_row: Возвращает число непустых строк
-    """
+        self.select_excel()
 
-    sheet_row = sheet.max_row
+    def __getattr__(self, item):
+        return f'Атрибута {item} не существует'
 
-    return sheet_row
+    def __str__(self):
+        return f'Выбранные колонки: {self.__selected_columns_print}\nТекущий файл: {self.__file_path}'
 
+    def select_excel(self):
 
-def replace_string(string: str) -> str:
+        """ Выбор файла Excel """
 
-    """
-    Функция форматирует строку (Конкретно здесь - номер). Удаляет лишние символы, добавляет отсутствующие куски номера.
+        self.__selected_columns = []
+        self.__selected_columns_print = []
 
-    :param string: Строка для редактирования
-    :return: Возвращает переформатированную строку
-    """
+        root = tk.Tk()
+        root.withdraw()
 
-    # Удаление лишних символов
-    string = re.sub(r',', ';', string)
-    string = re.sub(r'[^\d;]', '', string)
+        self.__file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
 
-    list_number = string.split(';')
+        if not self.__file_path:
+            print('Возникла ошибка! Возможно вы используете не тот файл!')
 
-    for i, phone in enumerate(list_number):
+        self.__wb = openpyxl.load_workbook(self.__file_path)
+        self.__sheet_main = self.__wb.active
 
-        result = re.match(r'\b\d{6}\b', phone)
+    def select_column(self, clear: bool = False) -> list:
 
-        if result:
-            list_number[i] = '73952' + phone
+        """Выбор колонок с номерами"""
 
-        result = re.search(r'^8', phone)
-        if result:
-            list_number[i] = re.sub(r'^8', '7', phone)
+        if clear:
+            self.__selected_columns = []
+            self.__selected_columns_print = []
 
-        result = re.search(r'^3', phone)
-        if result:
-            list_number[i] = '7' + phone
+        if not self.__selected_columns:
+            self.print_name_columns()
 
-        list_number[i] = re.sub(r'\b\d{1,10}\b', '', list_number[i])
+            while True:
 
-    string = (";".join(list_number))
+                input_data = input(
+                    'Введите номера колонок c номером телефона или введите "Далее" чтобы продолжить >> ').lower()
 
-    string = re.sub(r'^;', '' , string)
+                if not input_data:
+                    print(f'{Fore.RED}\nОшибка ввода данных!!\n')
+                    continue
 
-    return string
+                if input_data in 'далее':
+                    break
 
+                input_data = re.findall(r'\d+', input_data)
 
-def update_number():
+                self.__selected_columns_print += [int(i) for i in input_data if 1 <= int(i) <= self.__sheet_main.max_column]
+                self.__selected_columns_print = sorted(list(set(self.__selected_columns_print)))
 
-    """
-    Функция запускает процесс форматирования номера. Проходит по строкам с номерами и форматирует их. За форматирование
-    отвечает функция replace_string(). В конечном итоге сохраняет файл
+                self.__selected_columns += [i - 1 for i in self.__selected_columns_print]
+                self.__selected_columns = list(set(self.__selected_columns))
 
-    :return: Функция ничего не возвращает :/
-    """
+                print(f'\n{Fore.GREEN}Текущие колонки: {self.__selected_columns_print}')
 
-    columns = []
-    column_lenght = get_sheet_row()
+        return self.__selected_columns
 
-    print('Введите колонку с номерами\n'
-          'Колонку нужно выбрать по её порядковому номеру\n'
-          '** A-1, B-2, C-3, D-4, E-5, F-6, G-7, H-8 **')
+    def save_excel(self):
 
-    while True:
-        column = input('>> ').lower()
-        if column == 'далее':
-            break
+        """ Сохранение файла Excel """
+
+        while True:
+
+            try:
+                self.__wb.save(self.__file_path)
+                break
+
+            except PermissionError:
+                print(f'\n{Fore.RED}Не удалось сохранить файл. Закройте Excel таблицу, с данными.\n')
+
+                for i in range(5, 0, -1):
+                    print(f'Попытка повторного сохранения через {i} сек.')
+                    time.sleep(1)
+
+                print('\nПопытка сохранить файл......\n')
+                time.sleep(2)
+
+    def create_new_sheet(self):
+
+        """ Создание дополнительного листа """
+
+        if 'Mailing_result' not in self.__wb.sheetnames:
+            self.__wb.create_sheet('Mailing_result')
+            print('Страница результата создана.\n')
+
         else:
-            columns.append(int(column))
-            print(f'\nТекущие колонки: {columns}')
-            print(f'{Fore.GREEN}Введите "Далее" если готовы продолжить\n')
+            self.__sheet_mailing_result = self.__wb['Mailing_result']
+            self.__sheet_mailing_result.delete_rows(1, self.__sheet_mailing_result.max_row)
+            print('Страница результата очищена и готова к записи.\n')
 
-    for row in range(2, column_lenght):
-        for column in columns:
-            cell = sheet.cell(row=row, column=column)
-            if cell.value is not None:
-                val = str(cell.value)
-                val = replace_string(val)
-                cell.value = val
-            else:
-                cell.fill = PatternFill(fill_type='solid', start_color='999999')
+        self.save_excel()
 
-    while True:
-        try:
-            save_excel()
-            break
-        except:
-            print(f'\n{Fore.RED}Возникла ошибка сохранения. Возможно вы не закрыли файл с номерами.\n')
-            time.sleep(1)
-            for i in range(5, 0, -1):
-                print(f'Попытка повторного сохранения через {i} сек.')
-                time.sleep(1)
-            print('\nПопытка сохранить файл......\n')
-            time.sleep(2)
+    def write_additional_sheet(self, row: tuple, num_row: int, status: bool = True):
+
+        """Запись результата рассылки на доп лист"""
+
+        filling_successful = PatternFill(fill_type='solid', start_color='f5f5dc')
+        filling_failed = PatternFill(fill_type='solid', start_color='c4c43f')
+
+        self.__sheet_mailing_result.append(row)
+
+        for cell in self.__sheet_mailing_result[num_row]:
+
+            if not status:
+                cell.fill = filling_failed
+                continue
+
+            cell.fill = filling_successful
+
+        self.save_excel()
+
+    def get_sheet_row(self) -> int:
+
+        """Получить количество непустых строк"""
+
+        num_data_rows = 0
+
+        for i in self.__sheet_main.iter_rows(min_row=1, values_only=True):
+            if any(i):
+                num_data_rows += 1
+
+        return num_data_rows
+
+    def get_dict_keys_columns(self) -> dict:
+
+        """Выбор колонок для ключей из Docx документа"""
+
+        context_col = {}
+        keys = Support_function.get_keys_from_word()
+
+        if keys:
+            self.print_name_columns()
+            for i in keys:
+                choice = input(f'Введите колонку для {i} >> ')
+                context_col[i] = int(choice) - 1
+
+        return context_col
+
+    def print_name_columns(self):
+
+        """Отображение превью колонок таблицы"""
+
+        col_name = {}
+
+        for column in self.__sheet_main.iter_rows(min_row=1, max_row=1, values_only=True):
+            col_name = {i: col for i, col in enumerate(column) if col is not None}
+
+        table = PrettyTable()
+        table.field_names = [col + 1 for col in col_name.keys()]
+        table.add_row([col for col in col_name.values()])
+
+        print(table)
+
+    @property
+    def sheet_main(self):
+        """
+        Возврат главного листа
+        """
+        return self.__sheet_main
+
+    @property
+    def sheet_mailing_result(self):
+        """
+        Возврат листа с результатами рассылки
+        """
+        return self.__sheet_mailing_result
 
 
-def save_excel():
-    wb.save("Table.xlsx")
-    print(Fore.GREEN + '\nНомера отформатированы!\n\nВсе пустые ячейки выделены цветом!\n')
+excel_table = Excel()

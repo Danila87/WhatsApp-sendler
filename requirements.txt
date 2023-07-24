@@ -1,0 +1,7 @@
+colorama==0.4.6
+requests==2.30.0
+docxtpl==0.16.7
+openpyxl==3.2.0b1
+prettytable==3.7.0
+docx==0.2.4
+whatsapp-api-client-python==0.0.34

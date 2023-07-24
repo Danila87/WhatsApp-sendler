@@ -1,79 +1,94 @@
-import openpyxl
-import Excel_work as ex_work
 import json
+import time
 import requests
+import Formatting_numbers
+import Support_function
 
+from Excel_work import excel_table
 from colorama import init, Fore
-from whatsapp_api_client_python import API
-from openpyxl.styles import PatternFill
-
-
-wb = openpyxl.load_workbook(filename='Table.xlsx')
-sheet_start = wb['Start']
+from docxtpl import DocxTemplate
+from GreenAPI import gr_api
 
 init(autoreset=True)
 
-ID_INSTANCE = '1101799064'
-GREEN_API_TOKEN = '13c3394261004255ad82faf458d8a36871ceaeedd0664cd3b8'
-
-greenAPI = API.GreenApi(ID_INSTANCE, GREEN_API_TOKEN)
-
 
 def main_mailing():
-
     """
     Главная функция рассылки, которая запускает вспомогательные функции.
-
-    :return: Ничего не возвращает
+    Проверяет каждый номер на его регистрацию в WhatsApp. Неудачные номера или клиентов записывает на новый лист
     """
 
-    column_length = ex_work.get_sheet_row()
+    #if not gr_api.check_authorization():
+        #return
 
-    for row in range(2, column_length):
-        keys = []
-        for column in (7, 8):
+    Formatting_numbers.update_number()  # Запускаем форматирование номеров
+    excel_table.create_new_sheet()  # Создаём\очищаем лист с результатами
 
-            if sheet_start.cell(row=row, column=column).value is not None:
+    max_row = excel_table.get_sheet_row()  # Длина строк
+    columns = excel_table.select_column()  # Колонки с номерами
 
-                name_organization = sheet_start.cell(row=row, column=4).value
-                list_number = str(sheet_start.cell(row=row, column=column).value).split(';')
-                inn = sheet_start.cell(row=row, column=3).value
-                keys_send = []
+    context_col = excel_table.get_dict_keys_columns()  # Получаем ключи из docx
 
-                for number in list_number:
+    doc = DocxTemplate("content.docx")  # Открываем шаблон
 
-                    if check_number(name_organization=name_organization, phone_number=number) is True:
-                        send_message(name_organization=name_organization, prone_number=number)
-                    else:
-                        # TODO Тут нужно доделать проверку, что если по всем номерам не получилось отправить смс,
-                        #  то записывать этот момент
+    num_row = 0  # Счётчик строки
+    path_to_word = 'content.docx'
 
-                        keys_send.append(False)
-                        if len(keys) == 2 and all(keys):
-                            print('Клиенту вообще не было отправлено смс')
-                        unsent_messages(name_organization=name_organization, phone_number=number, inn=inn)
+    for row in excel_table.sheet_main.iter_rows(min_row=2, max_row=max_row, values_only=True):  # Цикл в длину строк
+
+        num_row += 1
+        list_failed_numbers = []  # Список для проверки отправки сообщений
+        list_full = []  # Список с номерами из всех колонок
+
+        for col in columns:  # Формируем список всех номеров по всем выбранным колонкам
+            if row[col] is None:
+                continue
+
+            list_numbers = str(row[col]).split(';')
+            list_full += list_numbers
+
+        if not list_full:  # Если список пустой, пишем на доп лист и пропускаем итерацию
+            excel_table.write_additional_sheet(row=row, num_row=num_row, status=False)
+            print(f'{num_row}: Отсутствуют номера в таблице!')
+            continue
+
+        if context_col:  # Если ключи в docx есть то формируем словарь с выбранными значениями и пишем в docx_2
+            context = {i: row[context_col[i]] for i in context_col}
+            doc.render(context)
+            doc.save('content_2.docx')
+            path_to_word = 'content_2.docx'
+
+        list_full = list(set(list_full))
+
+        for number in list_full:  # Проходимся по каждому номеру и отправляем сообщение, результат false\true пишем в список
+            if send_message(number, path_to_word):
+                time.sleep(5)
+                list_failed_numbers.append(True)
             else:
-                # TODO доделать закрашивание всей строки где вообще нет номера в обеих колонках
-                keys.append(False)
-                if len(keys) == 2 and all(keys):
-                    name_organization = sheet_start.cell(row=row, column=4).value
-                    unsent_messages(name_organization=name_organization)
-                    sheet_start.cell(row=row, column=1).fill = PatternFill(fill_type='solid', start_color='ffff00')
-                    ex_work.save_excel()
+                list_failed_numbers.append(False)
+
+        if all(x is False for x in list_failed_numbers):  # Если по всем номерам не получилось отправить - пишем на доп лист
+            excel_table.write_additional_sheet(row=row, num_row=num_row, status=False)
+            print(f'{num_row}: Не получилось отправить сообщение!')
+            continue
+
+        excel_table.write_additional_sheet(row=row, num_row=num_row)  # Тоже самое только пишем успех
+        print(f'{num_row}: Было отправлено сообщение!')
+
+    print('\nРассылка закончена!\n')
 
 
-def check_number(name_organization, phone_number) -> bool:
-
+def check_number(phone_number: str) -> bool:
     """
     Функция проверяет Зарегистрирован ли номер в WhatsApp или нет
 
-    :param name_organization: Название организации
     :param phone_number: Проверяемый номер телефона
-    :return: Возвращает True или False в зависимости от результата. Если номер зарегистрирован то True,
+
+    :return: Возвращает True или False в зависимости от результата. Если номер зарегистрирован, то True,
      в обратном случае False
     """
 
-    url = f"https://api.green-api.com/waInstance{ID_INSTANCE}/checkWhatsapp/{GREEN_API_TOKEN}"
+    url = f"https://api.green-api.com/waInstance{gr_api.id_instance}/checkWhatsapp/{gr_api.api_token}"
 
     payload = json.dumps({"phoneNumber": phone_number})
     headers = {
@@ -82,69 +97,32 @@ def check_number(name_organization, phone_number) -> bool:
 
     response = requests.request("POST", url, headers=headers, data=payload)
 
-    if response.json()['existsWhatsapp'] is False:
 
-        print(f'{Fore.RED}Организация {name_organization} по номеру {phone_number} не зарегистрирована в WhatsApp')
+    if response.status_code == 466:
+        print(f'{Fore.RED}\nВы исчерпали лимит проверок!\n')
         return False
 
-    elif response.json()['existsWhatsapp'] is True:
 
-        return True
+    if response.status_code == 200 and response.json()['existsWhatsapp'] is False:
+            return False
+
+    return True
 
 
-def send_message(name_organization: str, prone_number):
-
+def send_message(phone_number: str, path_to_word: str) -> bool:
     """
     Функция рассылки сообщения
 
-    :param name_organization: Название организации
-    :param prone_number: Номер куда будет отправлено сообщение
+    :param path_to_word: Путь к файлу, откуда брать данные
+    :param phone_number: Номер телефона
     :return: Ничего не возвращает
     """
 
-    print(f'{Fore.GREEN}Организации {name_organization} на номер {prone_number} отправили сообщение.')
+    if not check_number(phone_number=phone_number):
+        return False
 
-# TODO Функцию надо переделать, чтобы она записывала данные на новый лист в книге Excel
-def unsent_messages(name_organization, phone_number, inn):
+    text = Support_function.get_text_from_word(path_to_word)
 
-    """
-    Функция для записи на дополнительный лист экселя неудачных попыток отправки номера и незарегистрированных номеров в
-    WhatsApp.
+    gr_api.green_api.sending.sendMessage(f'{phone_number}@c.us', f'{text}')
 
-    :param name_organization: Название организации
-    :param phone_number: Номер куда было отправлено сообщение
-    :param inn: ИНН организации
-    :return: Ничего не возвращает
-    """
-
-    txt_unset_numbers = 'unset_numbers.txt'
-    with open(txt_unset_numbers, 'a', encoding='utf-8') as uns_numbers:
-        uns_numbers.write(
-            f'Организация {name_organization} ИНН {inn} по номеру {phone_number} не зарегистрирована в WhatsApp\n')
-
-# TODO Тут идут просто черновые функции где я пробую создавать/очищать и записывать данные на новый лист.
-#  В последствии этот набросок будет использоваться для записи ошибок/неотправленных смс на новый лист
-def create_new_sheet():
-    if 'Unset_numbers' in wb.sheetnames:
-        ws1 = wb['Unset_numbers']
-        ws1.delete_rows(2, ws1.max_row)
-        print('Страница очищена и готова к записи.')
-        wb.save("Table.xlsx")
-    else:
-        wb.create_sheet('Unset_numbers')
-        wb.save("Table.xlsx")
-        print('Страница создана.')
-
-
-def write_to_excel(status: str):
-    create_new_sheet()
-
-    rows = ex_work.get_sheet_row()
-    ws1 = wb['Unset_numbers']
-
-    for i in range(1, rows):
-        if sheet_start.cell(row=i, column=2).value == 'Бархатова Полина Павловна':
-            ws1.append([sheet_start.cell(row=i, column=1).value, sheet_start.cell(row=i, column=2).value, sheet_start.cell(row=i, column=4).value, sheet_start.cell(row=i, column=3).value, status])
-            wb.save("Table.xlsx")
-        else:
-            continue
+    return True
